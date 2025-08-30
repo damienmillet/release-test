@@ -71,7 +71,7 @@ jobs:
             const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
 
             // 5) Create stable release
-            const title = `${nextTag} (${today})`; // vX.Y.Z (2025-08-27)
+            const title = `${nextTag}`; // vX.Y.Z
             const body  = [
               notes
             ].join('\n');
