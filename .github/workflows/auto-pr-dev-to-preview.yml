@@ -60,12 +60,16 @@ jobs:
             };
             const sections = order.filter(k => groups[k].length).map(k => `### ${titles[k]}\n${groups[k].join('\n')}`).join('\n\n');
 
+            const changelog = sections
+              ? `## Changelog (dev → preview)\n`\n\n${sections}`
+              : `## Changelog (dev → preview)\n\n_Aucun commit différentiel._`;
+
             // 3) Bloc unique (avec empreinte DIFF – informatif)
             const START  = '<!-- AUTO-PR-CHANGELOG:START -->';
             const END    = '<!-- AUTO-PR-CHANGELOG:END -->';
             const DIFF   = `<!-- AUTO-PR-DIFF:${commits.map(c => c.sha).join(',')} -->`;
             const footer = '\n\n> Changelog généré automatiquement (GitHub Actions).';
-            const section = `${START}\n${DIFF}\n${footer}\n${END}`;
+            const section = `${START}\n${DIFF}\n${changelog}\n${footer}\n${END}`;
 
             const title = 'chore: sync dev → preview';
 
