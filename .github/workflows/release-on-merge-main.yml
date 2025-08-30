@@ -67,7 +67,7 @@ jobs:
               notes = lines.length ? lines.join('\n') : 'Aucun changement détecté.';
             }
 
-            const title = `${nextTag} – merge #${prNumber} → ${baseBranch}`;
+            const title = `v${nextTag}`;
             const body  = [
               `**Source PR**: #${prNumber}`,
               `**Branche**: \`${baseBranch}\` (depuis \`${headBranch}\`)`,
