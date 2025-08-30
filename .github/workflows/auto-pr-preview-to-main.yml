@@ -73,6 +73,9 @@ jobs:
             };
             const nextTag = bump(previousTag, bumpHint);
 
+            // 2bis) Date pour le titre
+            const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+
             // 3) Group by Conventional Commits
             const groups = { feat:[], fix:[], perf:[], refactor:[], docs:[], test:[], build:[], ci:[], chore:[], other:[] };
             const extract = (msg) => {
@@ -110,7 +113,8 @@ jobs:
             const footer = `\n\n> Changelog generated automatically (GitHub Actions).`;
             const section = `${START}\n${DIFF}\n${changelog}\n${footer}\n${END}`;
 
-            const title  = `sync: preview → main ${nextTag}`;
+            // Titre AVEC date
+            const title  = `sync: preview → main ${nextTag} (${today})`;
 
             // 5) Find existing PR preview→main
             const openPRs = await github.paginate(github.rest.pulls.list, { owner, repo, state: 'open', head: `${owner}:${head}`, base });
