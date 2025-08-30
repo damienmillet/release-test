@@ -40,7 +40,6 @@ jobs:
             // 2) Regroupement Conventional Commits
             const groups = { feat:[], fix:[], perf:[], refactor:[], docs:[], test:[], build:[], ci:[], chore:[], other:[] };
             const extract = (msg) => {
-              // type(scope)!: subject  |  subject (#123)
               const m = msg.match(/^(\w+)(\([\w\-\.]+\))?(!)?:\s+(.+)/);
               const type = m?.[1]?.toLowerCase();
               const subject = (m?.[4] ?? msg).split('\n')[0].trim();
@@ -68,12 +67,14 @@ jobs:
               .map(k => `### ${titles[k]}\n${groups[k].join('\n')}`)
               .join('\n\n');
 
+            const changelog = `## Changelog (${head} → ${base})\n\n${sections}`;
+
             // 3) Bloc unique (avec empreinte DIFF – informatif)
             const START  = '<!-- AUTO-PR-CHANGELOG:START -->';
             const END    = '<!-- AUTO-PR-CHANGELOG:END -->';
             const DIFF   = `<!-- AUTO-PR-DIFF:${commits.map(c => c.sha).join(',')} -->`;
             const footer = '\n\n> Changelog généré automatiquement (GitHub Actions).';
-            const section = `${START}\n${DIFF}\n${footer}\n${END}`;
+            const section = `${START}\n${DIFF}\n${changelog}\n${footer}\n${END}`;
 
             const title  = 'chore: promote preview → main';
 
@@ -86,7 +87,7 @@ jobs:
             if (openPRs.length > 0) {
               const current = openPRs[0];
 
-              // ✅ On ÉCRASE le body pour éviter toute duplication
+              // ✅ ÉCRASE le body pour éviter toute duplication
               const newBody = section;
 
               if ((current.body ?? '') !== newBody) {
