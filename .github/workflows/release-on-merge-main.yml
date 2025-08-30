@@ -1,15 +1,15 @@
-name: Release on merge → preview (auto notes)
+name: Release on merge → main (auto notes)
 
 on:
   pull_request:
     types: [ closed ]
-    branches: [ preview ]
+    branches: [ main ]
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-on-merge-preview
+  group: release-on-merge-main
   cancel-in-progress: false
 
 jobs:
@@ -17,7 +17,7 @@ jobs:
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     steps:
-      - name: Create pre-release with filtered notes
+      - name: Create stable release with filtered notes
         uses: actions/github-script@v7
         with:
           script: |
@@ -25,24 +25,22 @@ jobs:
             const pr = context.payload.pull_request;
             if (!pr) { core.setFailed('This job must be triggered by a pull_request event.'); return; }
 
-            const baseBranch = pr.base.ref; // preview
-            const headBranch = pr.head.ref; // usually dev
-            const prNumber   = pr.number;
+            const baseBranch = pr.base.ref; // main
 
             // 1) Latest tag
             let previousTag = null;
             try {
               const latest = await github.rest.repos.getLatestRelease({ owner, repo });
-              previousTag = latest.data.tag_name;
+              previousTag = latest.data.tag_name; // e.g. v1.2.3
               core.info(`Latest release: ${previousTag}`);
             } catch (e) {
               core.warning(`No published release yet: ${e.message}`);
             }
 
-            // 2) Next tag by label on PR
+            // 2) Next tag by PR label release:major|minor|patch (default: patch)
             const label = (pr.labels || []).map(l => l.name).find(n => /^release:(major|minor|patch)$/.test(n)) || 'release:patch';
             const bump = (tag, type) => {
-              if (!tag || !/^v?\d+\.\d+\.\d+$/.test(tag)) return 'v0.1.0';
+              if (!tag || !/^v?\d+\.\d+\.\d+$/.test(tag)) return 'v1.0.0';
               const [M,m,p] = tag.replace(/^v/,'').split('.').map(Number);
               if (type.endsWith('major')) return `v${M+1}.0.0`;
               if (type.endsWith('minor')) return `v${M}.${m+1}.0`;
@@ -50,7 +48,7 @@ jobs:
             };
             const nextTag = bump(previousTag, label);
 
-            // 3) Build notes via compare (filter merges + bot)
+            // 3) Build notes via compare (filter merges + github-actions[bot])
             const baseForCompare = previousTag ?? `${baseBranch}~1`;
             const cmp = await github.rest.repos.compareCommits({ owner, repo, base: baseForCompare, head: baseBranch });
 
@@ -63,21 +61,21 @@ jobs:
             });
 
             const lines = commits.map(c => `- ${c.commit.message.split('\n')[0]} (${c.sha.slice(0,7)})`);
-            const notesBody = lines.length ? lines.join('\n') : 'No changes detected.';
+            const notes = lines.length ? lines.join('\n') : 'No changes detected.';
 
-            // 4) Create pre-release
+            // 4) Create stable release
             const title = nextTag; // vX.Y.Z
             const body  = [
-              notesBody
+              notes
             ].join('\n');
 
-            const rel = await github.rest.repos.createRelease({
+            const release = await github.rest.repos.createRelease({
               owner, repo,
               tag_name: nextTag,
               name: title,
               body,
               target_commitish: baseBranch,
               draft: false,
-              prerelease: true
+              prerelease: false
             });
-            core.info(`Pre-release created: ${rel.data.html_url}`);
+            core.info(`Release created: ${release.data.html_url}`);
