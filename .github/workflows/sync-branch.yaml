@@ -1,0 +1,33 @@
+name: Force sync
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  rebase-dev:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Force preview branch to main
+        run: |
+          git fetch origin
+          git checkout main
+          # Replace preview by main (like reset --hard)
+          git push origin main:preview --force
+      - name: Force dev branch to preview
+        run: |
+          git fetch origin
+          git checkout preview
+          # Replace main by dev (like reset --hard)
+          git push origin preview:dev --force
