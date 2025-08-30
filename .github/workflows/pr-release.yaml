@@ -19,85 +19,72 @@ jobs:
     if: github.event.pull_request.merged == true && github.base_ref == 'preview'
     runs-on: ubuntu-latest
     steps:
-      - name: Créer la release avec changelog auto (GenerateReleaseNotes)
+      - name: Créer la release avec changelog auto
         uses: actions/github-script@v7
         with:
-          script: |
-            const { owner, repo } = context.repo;
-            const baseBranch = github.event.pull_request.base.ref; // "preview"
-            const headBranch = github.event.pull_request.head.ref; // ex: "dev" ou "feature/..."
-            const prNumber   = github.event.pull_request.number;
+            script: |
+                const { owner, repo } = context.repo;
 
-            // 1) Récupère le dernier tag de release (si existant)
-            let previousTag = null;
-            try {
-              const latest = await github.rest.repos.getLatestRelease({ owner, repo });
-              previousTag = latest.data.tag_name;
-              core.info(`Dernière release: ${previousTag}`);
-            } catch (e) {
-              core.warning(`Aucune release publiée détectée: ${e.message}`);
-            }
+                // ✅ Toujours récupérer la PR depuis le payload JS
+                const pr = context.payload.pull_request;
+                if (!pr) {
+                    core.setFailed('Ce job doit être déclenché par un event pull_request.');
+                    return;
+                }
 
-            // 2) Détermine le prochain tag (SemVer) — par défaut "patch".
-            //    Tu peux piloter via labels de PR: release:major/minor/patch
-            const semverBump =
-              (github.event.pull_request.labels || [])
-                .map(l => l.name)
-                .find(n => /^release:(major|minor|patch)$/.test(n))
-              || 'release:patch';
+                const baseBranch = pr.base.ref;              // ex: 'preview'
+                const headBranch = pr.head.ref;              // ex: 'dev'
+                const prNumber   = pr.number;
 
-            function bump(tag, bumpType) {
-              // fallback si pas de tag: v0.1.0
-              if (!tag || !/^v?\d+\.\d+\.\d+(-.*)?$/.test(tag)) return 'v0.1.0';
-              const m = tag.replace(/^v/,'').match(/^(\d+)\.(\d+)\.(\d+)/);
-              let [major, minor, patch] = m.slice(1).map(n => parseInt(n,10));
-              if (bumpType.endsWith('major'))      { major+=1; minor=0; patch=0; }
-              else if (bumpType.endsWith('minor')) { minor+=1; patch=0; }
-              else                                  { patch+=1; }
-              return `v${major}.${minor}.${patch}`;
-            }
-            const nextTag = bump(previousTag, semverBump);
-            core.info(`Prochain tag: ${nextTag} (${semverBump})`);
+                // 1) Dernier tag publié (si existant)
+                let previousTag = null;
+                try {
+                    const latest = await github.rest.repos.getLatestRelease({ owner, repo });
+                    previousTag = latest.data.tag_name;
+                    core.info(`Dernière release: ${previousTag}`);
+                } catch (e) {
+                    core.warning(`Aucune release publiée détectée: ${e.message}`);
+                }
 
-            // 3) Génère les release notes OFFICIELLES (auto) depuis previousTag → baseBranch
-            //    (GitHub inclut PR mergées, contributeurs, lien full changelog)
-            let notesBody = '';
-            try {
-              const rn = await github.rest.repos.generateReleaseNotes({
-                owner, repo,
-                tag_name: nextTag,
-                target_commitish: baseBranch,
-                ...(previousTag ? { previous_tag_name: previousTag } : {})
-              });
-              notesBody = rn.data.body || '';
-            } catch (e) {
-              core.warning(`Échec generateReleaseNotes, fallback compare ${previousTag ?? '(none)'}...${baseBranch}: ${e.message}`);
-              // Fallback officiel: compare (commits bruts)
-              const base = previousTag ?? `${baseBranch}~1`;
-              const cmp = await github.rest.repos.compareCommits({ owner, repo, base, head: baseBranch });
-              const lines = cmp.data.commits.map(c => `- ${c.commit.message.split('\n')[0]} (${c.sha.slice(0,7)})`);
-              notesBody = lines.length ? lines.join('\n') : 'Aucun changement détecté.';
-            }
+                // 2) Bump SemVer simple (pilotable par labels release:major|minor|patch)
+                const bumpLabel = (pr.labels || []).map(l => l.name).find(n => /^release:(major|minor|patch)$/.test(n)) || 'release:patch';
+                const bump = (tag, type) => {
+                    if (!tag || !/^v?\d+\.\d+\.\d+/.test(tag)) return 'v0.1.0';
+                    const [M,m,p] = tag.replace(/^v/,'').split('.').map(Number);
+                    if (type.endsWith('major')) return `v${M+1}.0.0`;
+                    if (type.endsWith('minor')) return `v${M}.${m+1}.0`;
+                    return `v${M}.${m}.${p+1}`;
+                };
+                const nextTag = bump(previousTag, bumpLabel);
+                core.info(`Prochain tag: ${nextTag} (${bumpLabel})`);
 
-            // 4) Crée la Release (prerelease=true sur preview)
-            const title = `${nextTag} – merge #${prNumber} → ${baseBranch}`;
-            const body  = [
-              `**Source PR**: #${prNumber}`,
-              `**Branche**: \`${baseBranch}\` (depuis \`${headBranch}\`)`,
-              '',
-              '---',
-              '',
-              notesBody
-            ].join('\n');
+                // 3) Release notes (officiel) avec fallback
+                let notesBody = '';
+                try {
+                    const rn = await github.rest.repos.generateReleaseNotes({
+                    owner, repo,
+                    tag_name: nextTag,
+                    target_commitish: baseBranch,
+                    ...(previousTag ? { previous_tag_name: previousTag } : {})
+                    });
+                    notesBody = rn.data.body || '';
+                } catch (e) {
+                    core.warning(`Échec generateReleaseNotes → fallback compare: ${e.message}`);
+                    const base = previousTag ?? `${baseBranch}~1`;
+                    const cmp  = await github.rest.repos.compareCommits({ owner, repo, base, head: baseBranch });
+                    notesBody  = cmp.data.commits.map(c => `- ${c.commit.message.split('\n')[0]} (${c.sha.slice(0,7)})`).join('\n') || 'Aucun changement détecté.';
+                }
 
-            const release = await github.rest.repos.createRelease({
-              owner, repo,
-              tag_name: nextTag,
-              name: title,
-              body,
-              target_commitish: baseBranch,
-              draft: false,
-              prerelease: true   // sur preview on marque en "pre-release"
-            });
-
-            core.info(`Release créée: ${release.data.html_url}`);
+                // 4) Créer la release (pré-release sur preview)
+                const title = `${nextTag} – merge #${prNumber} → ${baseBranch}`;
+                const body  = `**Source PR**: #${prNumber}\n**Branche**: \`${baseBranch}\` (depuis \`${headBranch}\`)\n\n---\n\n${notesBody}`;
+                const rel = await github.rest.repos.createRelease({
+                    owner, repo,
+                    tag_name: nextTag,
+                    name: title,
+                    body,
+                    target_commitish: baseBranch,
+                    draft: false,
+                    prerelease: true
+                });
+                core.info(`Release créée: ${rel.data.html_url}`);
