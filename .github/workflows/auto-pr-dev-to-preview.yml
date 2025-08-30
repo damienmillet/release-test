@@ -67,18 +67,25 @@ jobs:
               if (type === 'minor') return `v${M}.${m+1}.0`;
               return `v${M}.${m}.${p+1}`;
             };
-            const nextTag = bump(previousTag, bumpHint);
+            const nextTag  = bump(previousTag, bumpHint);
             const nextBeta = `${nextTag}-beta`;
+
+            // 2bis) Date pour le titre
+            const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
 
             // 3) Group by Conventional Commits
             const groups = { feat:[], fix:[], perf:[], refactor:[], docs:[], test:[], build:[], ci:[], chore:[], other:[] };
             const extract = (msg) => {
+              // type(scope)!: subject  |  subject (#123)
               const m = msg.match(/^(\w+)(\([\w\-\.]+\))?(!)?:\s+(.+)/);
               const type = m?.[1]?.toLowerCase();
               const subject = (m?.[4] ?? msg).split('\n')[0].trim();
               return { type, subject };
             };
-            const prRef = (msg) => (msg.match(/\(#(\d+)\)/)?.[1] ? ` #${msg.match(/$begin:math:text$#(\\d+)$end:math:text$/)[1]}` : '');
+            const prRef = (msg) => {
+              const m = msg.match(/\(#(\d+)\)/);
+              return m ? ` #${m[1]}` : '';
+            };
 
             for (const c of commits) {
               const { type, subject } = extract(c.commit.message);
@@ -104,10 +111,14 @@ jobs:
             const footer = `\n\n> Changelog generated automatically (GitHub Actions).`;
             const section = `${START}\n${DIFF}\n${changelog}\n${footer}\n${END}`;
 
-            const title = `sync: dev → preview ${nextBeta}`;
+            // Titre AVEC date
+            const title = `sync: dev → preview ${nextBeta} (${today})`;
 
             // 5) Find existing PR dev→preview
-            const openPRs = await github.paginate(github.rest.pulls.list, { owner, repo, state: 'open', head: `${owner}:${head}`, base });
+            const openPRs = await github.paginate(
+              github.rest.pulls.list,
+              { owner, repo, state: 'open', head: `${owner}:${head}`, base }
+            );
 
             if (openPRs.length > 0) {
               const current = openPRs[0];
@@ -123,8 +134,13 @@ jobs:
 
             // 6) Create PR with the block
             const body = section;
-            const pr = await github.rest.pulls.create({ owner, repo, title, head, base, body, draft: false, maintainer_can_modify: true });
+            const pr = await github.rest.pulls.create({
+              owner, repo, title, head, base, body, draft: false, maintainer_can_modify: true
+            });
             core.info(`PR created: #${pr.data.number} (${pr.data.html_url})`);
 
-            try { await github.rest.issues.addLabels({ owner, repo, issue_number: pr.data.number, labels: ['automation'] }); }
-            catch (e) { core.warning(`Optional label not added: ${e.message}`); }
+            try {
+              await github.rest.issues.addLabels({ owner, repo, issue_number: pr.data.number, labels: ['automation'] });
+            } catch (e) {
+              core.warning(`Optional label not added: ${e.message}`);
+            }
