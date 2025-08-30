@@ -55,7 +55,6 @@ jobs:
 
             const bump = (tag, type='patch') => {
               if (!tag || !/^v?\d+\.\d+\.\d+$/.test(tag)) {
-                // first pre-release: start clearly below v1
                 if (type === 'major') return 'v1.0.0';
                 if (type === 'minor') return 'v0.1.0';
                 return 'v0.1.1';
@@ -71,7 +70,6 @@ jobs:
             // 3) Group by Conventional Commits
             const groups = { feat:[], fix:[], perf:[], refactor:[], docs:[], test:[], build:[], ci:[], chore:[], other:[] };
             const extract = (msg) => {
-              // type(scope)!: subject  |  subject (#123)
               const m = msg.match(/^(\w+)(\([\w\-\.]+\))?(!)?:\s+(.+)/);
               const type = m?.[1]?.toLowerCase();
               const subject = (m?.[4] ?? msg).split('\n')[0].trim();
