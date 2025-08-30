@@ -17,7 +17,7 @@ jobs:
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     steps:
-      - name: Create pre-release (-beta) with filtered notes and date
+      - name: Create pre-release (-beta) with grouped notes
         uses: actions/github-script@v7
         with:
           script: |
@@ -38,7 +38,7 @@ jobs:
               core.warning(`No published release yet: ${e.message}`);
             }
 
-            // 2) Next base tag by PR label
+            // 2) Next base tag by PR label (release:major|minor|patch)
             const label = (pr.labels || []).map(l => l.name).find(n => /^release:(major|minor|patch)$/.test(n)) || 'release:patch';
             const bump = (tag, type) => {
               if (!tag || !/^v?\d+\.\d+\.\d+$/.test(tag)) return 'v0.1.0';
@@ -48,17 +48,13 @@ jobs:
               return `v${M}.${m}.${p+1}`;
             };
             const baseTag = bump(previousTag, label);
-
-            // 3) Append -beta and add date
-            const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
             const betaTag = `${baseTag}-beta`;
-            const title   = `${betaTag}`;
 
-            // 4) Build notes via compare (filter merges + bot)
+            // 3) Build grouped notes via compare (filter merges + bot)
             const baseForCompare = previousTag ?? `${baseBranch}~1`;
             const cmp = await github.rest.repos.compareCommits({ owner, repo, base: baseForCompare, head: baseBranch });
 
-            const commits = (cmp.data.commits || []).filter(c => {
+            const filtered = (cmp.data.commits || []).filter(c => {
               const isMerge = (Array.isArray(c.parents) ? c.parents.length : 0) > 1 || /^Merge\b/i.test(c.commit.message);
               const isBot   = c.author?.login === 'github-actions[bot]'
                            || /github-actions\[bot\]/i.test(c.commit?.author?.name || '')
@@ -66,13 +62,39 @@ jobs:
               return !isMerge && !isBot;
             });
 
-            const lines = commits.map(c => `- ${c.commit.message.split('\n')[0]} (${c.sha.slice(0,7)})`);
-            const notes = lines.length ? lines.join('\n') : 'No changes detected.';
+            const groups = { feat:[], fix:[], perf:[], refactor:[], docs:[], test:[], build:[], ci:[], chore:[], other:[] };
+            const extract = (msg) => {
+              const m = msg.match(/^(\w+)(\([\w\-\.]+\))?(!)?:\s+(.+)/);
+              const type = m?.[1]?.toLowerCase();
+              const subject = (m?.[4] ?? msg).split('\n')[0].trim();
+              return { type, subject };
+            };
+            const prRef = (msg) => {
+              const m = msg.match(/\(#(\d+)\)/);
+              return m ? ` #${m[1]}` : '';
+            };
 
-            // 5) Create pre-release
-            const body = [
-              notes
-            ].join('\n');
+            for (const c of filtered) {
+              const { type, subject } = extract(c.commit.message);
+              const line = `- ${subject}${prRef(c.commit.message)} (${c.sha.slice(0,7)})`;
+              if (type && groups[type]) groups[type].push(line); else groups.other.push(line);
+            }
+
+            const order  = ['feat','fix','perf','refactor','docs','test','build','ci','chore','other'];
+            const titles = {
+              feat:'✨ Features', fix:'🐞 Fixes', perf:'⚡️ Performance', refactor:'♻️ Refactor',
+              docs:'📝 Docs', test:'✅ Tests', build:'🏗 Build', ci:'🤖 CI', chore:'🧹 Chore', other:'🔹 Others'
+            };
+            const sections = order
+              .filter(k => groups[k].length)
+              .map(k => `### ${titles[k]}\n${groups[k].join('\n')}`)
+              .join('\n\n');
+
+            const notes = sections || 'No changes detected.';
+
+            // 4) Create pre-release (tag + title in -beta)
+            const title = betaTag;
+            const body  = notes;
 
             const rel = await github.rest.repos.createRelease({
               owner, repo,
