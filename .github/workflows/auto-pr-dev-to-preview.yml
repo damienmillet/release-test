@@ -101,8 +101,8 @@ jobs:
             const sections = order.filter(k => groups[k].length).map(k => `### ${titles[k]}\n${groups[k].join('\n')}`).join('\n\n');
 
             const changelog = sections
-              ? `## Changelog ${nextBeta}\n\n${sections}`
-              : `## Changelog ${nextBeta}\n\n_No differential commits._`;
+              ? `## Changelog ${nextBeta} (${today})\n\n${sections}`
+              : `## Changelog ${nextBeta} (${today})\n\n_No differential commits._`;
 
             // 4) Single block + DIFF fingerprint
             const START  = '<!-- AUTO-PR-CHANGELOG:START -->';
@@ -112,7 +112,7 @@ jobs:
             const section = `${START}\n${DIFF}\n${changelog}\n${footer}\n${END}`;
 
             // Titre AVEC date
-            const title = `sync: dev → preview ${nextBeta} (${today})`;
+            const title = `sync: dev → preview ${nextBeta}-beta`;
 
             // 5) Find existing PR dev→preview
             const openPRs = await github.paginate(
