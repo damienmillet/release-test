@@ -1,18 +1,18 @@
-name: Auto PR preview → main
+name: Auto PR dev → preview
 
 on:
   push:
-    branches: [ preview ]
+    branches: [ dev ]
   pull_request:
     types: [ closed ]
-    branches: [ preview ]
+    branches: [ dev ]
 
 permissions:
   contents: read
   pull-requests: write
 
 concurrency:
-  group: auto-pr-preview-to-main
+  group: auto-pr-dev-to-preview
   cancel-in-progress: false
 
 jobs:
@@ -20,15 +20,15 @@ jobs:
     if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
     runs-on: ubuntu-latest
     steps:
-      - name: Open/update PR preview → main (overwrite body, no duplicates)
+      - name: Prepare grouped changelog & open/update PR dev → preview (overwrite body)
         uses: actions/github-script@v7
         with:
           script: |
             const { owner, repo } = context.repo;
-            const head = 'preview';
-            const base = 'main';
+            const head = 'dev';
+            const base = 'preview';
 
-            // 1) Compare main...preview
+            // 1) Compare preview...dev
             const compare = await github.rest.repos.compareCommits({ owner, repo, base, head });
 
             // Exclude merge commits
@@ -37,12 +37,8 @@ jobs:
               (Array.isArray(c.parents) ? c.parents.length : 0) <= 1 &&
               !/^Merge\b/i.test(c.commit.message)
             );
-            if (commits.length === 0) {
-              core.info(`No diff (after filtering merges) between ${base} and ${head} — no PR created.`);
-              return;
-            }
 
-            // 2) Determine next tag (release)
+            // 2) Resolve next tag (pre-release)
             let previousTag = null;
             try {
               const latest = await github.rest.repos.getLatestRelease({ owner, repo });
@@ -52,13 +48,16 @@ jobs:
               core.warning(`No published release yet: ${e.message}`);
             }
 
+            // bump hint from commit messages: release:major|minor|patch (default: patch)
             const bumpHint = (commits
               .map(c => c.commit.message.match(/release:(major|minor|patch)/i)?.[1]?.toLowerCase())
               .filter(Boolean).pop()) || 'patch';
 
             const bump = (tag, type='patch') => {
               if (!tag || !/^v?\d+\.\d+\.\d+$/.test(tag)) {
-                return (type==='major') ? 'v1.0.0' : (type==='minor' ? 'v1.1.0' : 'v1.0.1');
+                if (type === 'major') return 'v1.0.0';
+                if (type === 'minor') return 'v0.1.0';
+                return 'v0.1.1';
               }
               const [M,m,p] = tag.replace(/^v/,'').split('.').map(Number);
               if (type === 'major') return `v${M+1}.0.0`;
@@ -66,6 +65,7 @@ jobs:
               return `v${M}.${m}.${p+1}`;
             };
             const nextTag = bump(previousTag, bumpHint);
+            const nextPre = `${nextTag}-pre`;
 
             // 3) Group by Conventional Commits
             const groups = { feat:[], fix:[], perf:[], refactor:[], docs:[], test:[], build:[], ci:[], chore:[], other:[] };
@@ -98,19 +98,19 @@ jobs:
               .join('\n\n');
 
             const changelog = sections
-              ? `## Changelog ${nextTag}\n\n${sections}`
-              : `## Changelog ${nextTag}\n\n_No differential commits._`;
+              ? `## Changelog ${nextPre}\n\n${sections}`
+              : `## Changelog ${nextPre}\n\n_No differential commits._`;
 
-            // 4) Single block + DIFF
+            // 4) Single block + DIFF fingerprint
             const START  = '<!-- AUTO-PR-CHANGELOG:START -->';
             const END    = '<!-- AUTO-PR-CHANGELOG:END -->';
             const DIFF   = `<!-- AUTO-PR-DIFF:${commits.map(c => c.sha).join(',')} -->`;
             const footer = `\n\n> Changelog generated automatically (GitHub Actions).`;
             const section = `${START}\n${DIFF}\n${changelog}\n${footer}\n${END}`;
 
-            const title  = `sync: preview → main ${nextTag}`;
+            const title = `sync : dev → preview ${nextTag}`;
 
-            // 5) Find existing PR preview→main
+            // 5) Find existing PR dev→preview
             const openPRs = await github.paginate(
               github.rest.pulls.list,
               { owner, repo, state: 'open', head: `${owner}:${head}`, base }

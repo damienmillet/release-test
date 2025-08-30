@@ -1,15 +1,15 @@
-name: Release on merge → main (auto notes)
+name: Release on merge → preview (auto notes)
 
 on:
   pull_request:
     types: [ closed ]
-    branches: [ main ]
+    branches: [ preview ]
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-on-merge-main
+  group: release-on-merge-preview
   cancel-in-progress: false
 
 jobs:
@@ -17,7 +17,7 @@ jobs:
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     steps:
-      - name: Create stable release with auto-generated notes
+      - name: Create pre-release with auto-generated notes
         uses: actions/github-script@v7
         with:
           script: |
@@ -28,8 +28,8 @@ jobs:
               return;
             }
 
-            const baseBranch = pr.base.ref;   // main
-            const headBranch = pr.head.ref;   // preview
+            const baseBranch = pr.base.ref;   // preview
+            const headBranch = pr.head.ref;   // usually dev
             const prNumber   = pr.number;
 
             // 1) Find latest tag/release
@@ -47,7 +47,7 @@ jobs:
               .find(n => /^release:(major|minor|patch)$/.test(n)) || 'release:patch';
 
             const bump = (tag, type) => {
-              if (!tag || !/^v?\d+\.\d+\.\d+$/.test(tag)) return 'v1.0.0';
+              if (!tag || !/^v?\d+\.\d+\.\d+$/.test(tag)) return 'v0.1.0';
               const [M,m,p] = tag.replace(/^v/,'').split('.').map(Number);
               if (type.endsWith('major')) return `v${M+1}.0.0`;
               if (type.endsWith('minor')) return `v${M}.${m+1}.0`;
@@ -56,7 +56,7 @@ jobs:
             const nextTag = bump(previousTag, label);
 
             // 3) Auto-generated release notes (fallback to compare)
-            let notes = '';
+            let notesBody = '';
             try {
               const rn = await github.rest.repos.generateReleaseNotes({
                 owner, repo,
@@ -64,34 +64,27 @@ jobs:
                 target_commitish: baseBranch,
                 ...(previousTag ? { previous_tag_name: previousTag } : {})
               });
-              notes = rn.data.body || '';
+              notesBody = rn.data.body || '';
             } catch (e) {
               core.warning(`generateReleaseNotes failed → fallback to compare: ${e.message}`);
               const base = previousTag ?? `${baseBranch}~1`;
               const cmp  = await github.rest.repos.compareCommits({ owner, repo, base, head: baseBranch });
-              const lines = (cmp.data.commits || [])
-                .map(c => `- ${c.commit.message.split('\n')[0]} (${c.sha.slice(0,7)})`);
-              notes = lines.length ? lines.join('\n') : 'No changes detected.';
+              notesBody  = (cmp.data.commits || [])
+                .map(c => `- ${c.commit.message.split('\n')[0]} (${c.sha.slice(0,7)})`)
+                .join('\n') || 'No changes detected.';
             }
 
-            // 4) Create stable release (no prerelease)
+            // 4) Create pre-release
             const title = nextTag; // release title = vX.Y.Z
-            const body  = [
-              `**Source PR**: #${prNumber}`,
-              `**Branch**: \`${baseBranch}\` (from \`${headBranch}\`)`,
-              '',
-              '---',
-              '',
-              notes
-            ].join('\n');
+            const body  = `**Source PR**: #${prNumber}\n**Branch**: \`${baseBranch}\` (from \`${headBranch}\`)\n\n---\n\n${notesBody}`;
 
-            const release = await github.rest.repos.createRelease({
+            const rel = await github.rest.repos.createRelease({
               owner, repo,
               tag_name: nextTag,
               name: title,
               body,
               target_commitish: baseBranch,
               draft: false,
-              prerelease: false
+              prerelease: true
             });
-            core.info(`Release created: ${release.data.html_url}`);
+            core.info(`Pre-release created: ${rel.data.html_url}`);

@@ -1,0 +1,82 @@
+# .github/workflows/auto-pr-preview-to-main.yml
+name: Auto PR preview → main
+
+on:
+  push:
+    branches: [ preview ]          # un merge sur preview déclenche un push
+  pull_request:
+    types: [ closed ]
+    branches: [ preview ]          # filet de sécurité si une PR vers preview est mergée
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: auto-pr-preview-to-main
+  cancel-in-progress: false
+
+jobs:
+  open-pr:
+    if: |
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/preview')) ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.merged == true &&
+       github.base_ref == 'preview')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ouvrir/mettre à jour la PR preview → main avec changelog
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const head = 'preview';
+            const base = 'main';
+
+            // 1) Générer un changelog léger via compare main...preview
+            //    -> les commits présents dans preview et pas encore dans main
+            const cmp = await github.rest.repos.compareCommits({ owner, repo, base, head });
+            if (!cmp.data.commits || cmp.data.commits.length === 0) {
+              core.info(`Aucun diff entre ${base} et ${head} — pas de PR à créer.`);
+              return;
+            }
+            const lines = cmp.data.commits.map(c => {
+              const first = c.commit.message.split('\n')[0].trim();
+              return `- ${first} (${c.sha.slice(0,7)})`;
+            });
+            const changelog = `## Changelog (preview → main)\n\n_Comparaison_: \`${base}...${head}\`\n\n${lines.join('\n')}`;
+
+            // 2) Chercher une PR ouverte preview → main pour éviter les doublons
+            const openPRs = await github.paginate(
+              github.rest.pulls.list,
+              { owner, repo, state: 'open', head: `${owner}:${head}`, base }
+            );
+
+            const title = 'chore: promote preview → main';
+            const footer = '\n\n---\n> PR générée automatiquement via GitHub Actions.';
+
+            if (openPRs.length > 0) {
+              const current = openPRs[0];
+              const newBody = `${changelog}${footer}\n\n${current.body ?? ''}`;
+              await github.rest.pulls.update({
+                owner, repo, pull_number: current.number, title, body: newBody
+              });
+              core.info(`PR mise à jour: #${current.number} (${current.html_url})`);
+              return;
+            }
+
+            // 3) Créer la PR si absente
+            const body = `${changelog}${footer}`;
+            const pr = await github.rest.pulls.create({
+              owner, repo, title, head, base, body, draft: false, maintainer_can_modify: true
+            });
+            core.info(`PR créée: #${pr.data.number} (${pr.data.html_url})`);
+
+            // 4) (Optionnel) Ajouter un label
+            try {
+              await github.rest.issues.addLabels({
+                owner, repo, issue_number: pr.data.number, labels: ['automation']
+              });
+            } catch (e) {
+              core.warning(`Label non ajouté (optionnel): ${e.message}`);
+            }
