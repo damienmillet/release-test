@@ -1,5 +1,5 @@
 # .github/workflows/auto-pr-dev-to-preview.yml
-name: Auto PR dev → preview (releases changelog)
+name: Auto PR dev → preview
 
 on:
   push:

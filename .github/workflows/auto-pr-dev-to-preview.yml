@@ -1,45 +1,43 @@
-name: Auto PR preview → main
+name: Auto PR dev → preview
 
 on:
   push:
-    branches: [ preview ]
+    branches: [ dev ]
   pull_request:
     types: [ closed ]
-    branches: [ preview ]
+    branches: [ dev ]
 
 permissions:
   contents: read
   pull-requests: write
 
 concurrency:
-  group: auto-pr-preview-to-main
+  group: auto-pr-dev-to-preview
   cancel-in-progress: false
 
 jobs:
   open-pr:
+    # Les triggers filtrent déjà la branche; on garde juste "merged == true" pour le cas PR
     if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
     runs-on: ubuntu-latest
     steps:
-      - name: Ouvrir/mettre à jour la PR preview → main (changelog groupé)
+      - name: Préparer changelog groupé & ouvrir/mettre à jour PR dev → preview
         uses: actions/github-script@v7
         with:
           script: |
             const { owner, repo } = context.repo;
-            const head = 'preview';
-            const base = 'main';
+            const head = 'dev';
+            const base = 'preview';
 
-            // --- 1) Compare officiel main...preview
+            // --- 1) Compare officiel preview...dev
             const compare = await github.rest.repos.compareCommits({ owner, repo, base, head });
             const commits = compare.data.commits || [];
-            if (commits.length === 0) {
-              core.info(`Aucun diff entre ${base} et ${head} — pas de PR à créer.`);
-              return;
-            }
 
-            // --- 2) Regroupement Conventional Commits (même logique)
+            // --- 2) Regroupement Conventional Commits
             const groups = { feat:[], fix:[], perf:[], refactor:[], docs:[], test:[], build:[], ci:[], chore:[], other:[] };
 
             const extract = (msg) => {
+              // type(scope)!: subject  |  subject (#123)
               const m = msg.match(/^(\w+)(\([\w\-\.]+\))?(!)?:\s+(.+)/);
               const type = m?.[1]?.toLowerCase();
               const subject = (m?.[4] ?? msg).split('\n')[0].trim();
@@ -69,10 +67,12 @@ jobs:
               .map(k => `### ${titles[k]}\n${groups[k].join('\n')}`)
               .join('\n\n');
 
-            const changelog = `## Changelog (${head} → ${base})\n\n_Comparaison_: \`${base}...${head}\`\n\n${sections}`;
+            const changelog = sections
+              ? `## Changelog (dev → preview)\n\n_Comparaison_: \`${base}...${head}\`\n\n${sections}`
+              : `## Changelog (dev → preview)\n\n_Aucun commit différentiel._`;
 
-            // --- 3) Ouvrir ou mettre à jour la PR preview → main
-            const title  = 'chore: promote preview → main';
+            // --- 3) Ouvrir ou mettre à jour la PR dev → preview
+            const title = 'chore: sync dev → preview';
             const footer = '\n\n---\n> Changelog regroupé automatiquement (GitHub Actions).';
 
             const openPRs = await github.paginate(
