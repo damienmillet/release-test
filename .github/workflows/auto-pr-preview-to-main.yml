@@ -21,7 +21,7 @@ jobs:
     if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
     runs-on: ubuntu-latest
     steps:
-      - name: Ouvrir/mettre à jour la PR preview → main (changelog groupé)
+      - name: Ouvrir/mettre à jour la PR preview → main (body écrasé, pas de doublons)
         uses: actions/github-script@v7
         with:
           script: |
@@ -46,7 +46,6 @@ jobs:
               const subject = (m?.[4] ?? msg).split('\n')[0].trim();
               return { type, subject };
             };
-            // ✅ regex corrigée
             const prRef = (msg) => {
               const m = msg.match(/\(#(\d+)\)/);
               return m ? ` #${m[1]}` : '';
@@ -69,29 +68,16 @@ jobs:
               .map(k => `### ${titles[k]}\n${groups[k].join('\n')}`)
               .join('\n\n');
 
-            const changelog = `## Changelog (${head} → ${base})\n\n_Comparaison_: \`${base}...${head}\`\n\n${sections}`;
-
-            // 3) Bloc idempotent + empreinte de diff
+            // 3) Bloc unique (avec empreinte DIFF – informatif)
             const START  = '<!-- AUTO-PR-CHANGELOG:START -->';
             const END    = '<!-- AUTO-PR-CHANGELOG:END -->';
             const DIFF   = `<!-- AUTO-PR-DIFF:${commits.map(c => c.sha).join(',')} -->`;
-            const footer = '\n\n> Changelog regroupé automatiquement (GitHub Actions).';
-            const section = `${START}\n${DIFF}\n${changelog}\n${footer}\n${END}`;
+            const footer = '\n\n> Changelog généré automatiquement (GitHub Actions).';
+            const section = `${START}\n${DIFF}\n${footer}\n${END}`;
 
             const title  = 'chore: promote preview → main';
 
-            // 4) Utilitaire de remplacement par indices (pas de RegExp fragile)
-            const replaceBlock = (prev, block) => {
-              const s = prev.indexOf(START);
-              const e = prev.indexOf(END);
-              if (s !== -1 && e !== -1 && e > s) {
-                return prev.slice(0, s) + block + prev.slice(e + END.length);
-              }
-              // pas de bloc : on préfixe une seule fois
-              return `${block}\n\n${prev}`;
-            };
-
-            // 5) PR existante ?
+            // 4) PR existante ?
             const openPRs = await github.paginate(
               github.rest.pulls.list,
               { owner, repo, state: 'open', head: `${owner}:${head}`, base }
@@ -99,32 +85,22 @@ jobs:
 
             if (openPRs.length > 0) {
               const current = openPRs[0];
-              const prev = (current.body ?? '').trim();
 
-              // Si bloc présent, comparer l'empreinte DIFF
-              const s = prev.indexOf(START);
-              const e = prev.indexOf(END);
-              if (s !== -1 && e !== -1 && e > s) {
-                const existingBlock = prev.slice(s, e + END.length);
-                const existingDiff = existingBlock.match(/<!-- AUTO-PR-DIFF:([^-]+)-->/)?.[1]?.trim() ?? '';
-                const newDiff = commits.map(c => c.sha).join(',');
-                if (existingDiff === newDiff) {
-                  core.info('PR déjà à jour (empreinte identique), aucune modification.');
-                  return;
-                }
-              }
+              // ✅ On ÉCRASE le body pour éviter toute duplication
+              const newBody = section;
 
-              const newBody = replaceBlock(prev, section);
-              if (newBody !== prev) {
-                await github.rest.pulls.update({ owner, repo, pull_number: current.number, title, body: newBody });
-                core.info(`PR mise à jour: #${current.number} (${current.html_url})`);
+              if ((current.body ?? '') !== newBody) {
+                await github.rest.pulls.update({
+                  owner, repo, pull_number: current.number, title, body: newBody
+                });
+                core.info(`PR mise à jour (body écrasé): #${current.number} (${current.html_url})`);
               } else {
-                core.info('Aucune modification nécessaire.');
+                core.info('PR déjà à jour, aucune modification.');
               }
               return;
             }
 
-            // 6) Créer la PR avec le bloc directement
+            // 5) Créer la PR avec le bloc directement
             const body = section;
             const pr = await github.rest.pulls.create({
               owner, repo, title, head, base, body, draft: false, maintainer_can_modify: true
