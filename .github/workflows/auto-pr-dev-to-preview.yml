@@ -29,22 +29,18 @@ jobs:
             const head = 'dev';
             const base = 'preview';
 
-            // 1) Compare officiel preview...dev
+            // 1) Compare preview...dev
             const compare = await github.rest.repos.compareCommits({ owner, repo, base, head });
             const commits = compare.data.commits || [];
 
             // 2) Regroupement Conventional Commits
             const groups = { feat:[], fix:[], perf:[], refactor:[], docs:[], test:[], build:[], ci:[], chore:[], other:[] };
-
             const extract = (msg) => {
-              // type(scope)!: subject  |  subject (#123)
               const m = msg.match(/^(\w+)(\([\w\-\.]+\))?(!)?:\s+(.+)/);
               const type = m?.[1]?.toLowerCase();
               const subject = (m?.[4] ?? msg).split('\n')[0].trim();
               return { type, subject };
             };
-
-            // ✅ regex corrigée
             const prRef = (msg) => {
               const m = msg.match(/\(#(\d+)\)/);
               return m ? ` #${m[1]}` : '';
@@ -58,15 +54,17 @@ jobs:
             }
 
             const order  = ['feat','fix','perf','refactor','docs','test','build','ci','chore','other'];
-            const titles = { feat:'✨ Features', fix:'🐞 Fixes', perf:'⚡️ Performance', refactor:'♻️ Refactor',
-                            docs:'📝 Docs', test:'✅ Tests', build:'🏗 Build', ci:'🤖 CI', chore:'🧹 Chore', other:'🔹 Others' };
-
+            const titles = {
+              feat:'✨ Features', fix:'🐞 Fixes', perf:'⚡️ Performance', refactor:'♻️ Refactor',
+              docs:'📝 Docs', test:'✅ Tests', build:'🏗 Build', ci:'🤖 CI', chore:'🧹 Chore', other:'🔹 Others'
+            };
             const sections = order.filter(k => groups[k].length).map(k => `### ${titles[k]}\n${groups[k].join('\n')}`).join('\n\n');
+
             const changelog = sections
               ? `## Changelog (dev → preview)\n\n_Comparaison_: \`${base}...${head}\`\n\n${sections}`
               : `## Changelog (dev → preview)\n\n_Aucun commit différentiel._`;
 
-            // 3) Bloc idempotent + empreinte de diff
+            // 3) Bloc unique (avec empreinte DIFF – informatif)
             const START  = '<!-- AUTO-PR-CHANGELOG:START -->';
             const END    = '<!-- AUTO-PR-CHANGELOG:END -->';
             const DIFF   = `<!-- AUTO-PR-DIFF:${commits.map(c => c.sha).join(',')} -->`;
@@ -75,55 +73,41 @@ jobs:
 
             const title = 'chore: sync dev → preview';
 
-            // 4) Chercher une PR ouverte dev → preview
-            const openPRs = await github.paginate(github.rest.pulls.list, { owner, repo, state: 'open', head: `${owner}:${head}`, base });
-
-            // --- Fonction utilitaire: remplacement par indices (pas de RegExp fragile)
-            const replaceBlock = (prev, block) => {
-              const s = prev.indexOf(START);
-              const e = prev.indexOf(END);
-              if (s !== -1 && e !== -1 && e > s) {
-                return prev.slice(0, s) + block + prev.slice(e + END.length);
-              }
-              // si pas de bloc, on préfixe une seule fois
-              return `${block}\n\n${prev}`;
-            };
+            // 4) Chercher PR ouverte dev → preview
+            const openPRs = await github.paginate(
+              github.rest.pulls.list,
+              { owner, repo, state: 'open', head: `${owner}:${head}`, base }
+            );
 
             if (openPRs.length > 0) {
               const current = openPRs[0];
-              const prev = (current.body ?? '').trim();
 
-              // si déjà un bloc, vérifie l'empreinte DIFF
-              const s = prev.indexOf(START);
-              const e = prev.indexOf(END);
-              if (s !== -1 && e !== -1 && e > s) {
-                const existingBlock = prev.slice(s, e + END.length);
-                // si l'empreinte est identique, skip
-                const existingDiff = existingBlock.match(/<!-- AUTO-PR-DIFF:([^-]+)-->/)?.[1]?.trim() ?? '';
-                const newDiff = commits.map(c => c.sha).join(',');
-                if (existingDiff === newDiff) {
-                  core.info('PR déjà à jour (empreinte identique), aucune modification.');
-                  return;
-                }
-              }
+              // ✅ ÉCRASE le body pour éviter toute duplication
+              const newBody = section;
 
-              const newBody = replaceBlock(prev, section);
-              if (newBody !== prev) {
-                await github.rest.pulls.update({ owner, repo, pull_number: current.number, title, body: newBody });
-                core.info(`PR mise à jour: #${current.number} (${current.html_url})`);
+              // Update uniquement si nécessaire
+              if ((current.body ?? '') !== newBody) {
+                await github.rest.pulls.update({
+                  owner, repo, pull_number: current.number, title, body: newBody
+                });
+                core.info(`PR mise à jour (body écrasé): #${current.number} (${current.html_url})`);
               } else {
-                core.info('Aucune modification nécessaire.');
+                core.info('PR déjà à jour, aucune modification.');
               }
               return;
             }
 
-            // 5) Créer la PR avec le bloc directement
+            // 5) Créer la PR avec uniquement le bloc
             const body = section;
-            const pr = await github.rest.pulls.create({ owner, repo, title, head, base, body, draft: false, maintainer_can_modify: true });
+            const pr = await github.rest.pulls.create({
+              owner, repo, title, head, base, body, draft: false, maintainer_can_modify: true
+            });
             core.info(`PR créée: #${pr.data.number} (${pr.data.html_url})`);
 
             try {
-              await github.rest.issues.addLabels({ owner, repo, issue_number: pr.data.number, labels: ['automation'] });
+              await github.rest.issues.addLabels({
+                owner, repo, issue_number: pr.data.number, labels: ['automation']
+              });
             } catch (e) {
               core.warning(`Label non ajouté (optionnel): ${e.message}`);
             }
