@@ -1,15 +1,15 @@
-name: Release on merge → preview (auto notes)
+name: Release on merge → main (auto notes)
 
 on:
   pull_request:
     types: [ closed ]
-    branches: [ preview ]
+    branches: [ main ]
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-on-merge-preview
+  group: release-on-merge-main
   cancel-in-progress: false
 
 jobs:
@@ -17,22 +17,19 @@ jobs:
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     steps:
-      - name: Create pre-release with auto-generated notes
+      - name: Create stable release with filtered notes
         uses: actions/github-script@v7
         with:
           script: |
             const { owner, repo } = context.repo;
             const pr = context.payload.pull_request;
-            if (!pr) {
-              core.setFailed('This job must be triggered by a pull_request event.');
-              return;
-            }
+            if (!pr) { core.setFailed('This job must be triggered by a pull_request event.'); return; }
 
-            const baseBranch = pr.base.ref;   // preview
-            const headBranch = pr.head.ref;   // usually dev
+            const baseBranch = pr.base.ref; // main
+            const headBranch = pr.head.ref; // preview
             const prNumber   = pr.number;
 
-            // 1) Find latest tag/release
+            // 1) Latest tag
             let previousTag = null;
             try {
               const latest = await github.rest.repos.getLatestRelease({ owner, repo });
@@ -42,12 +39,10 @@ jobs:
               core.warning(`No published release yet: ${e.message}`);
             }
 
-            // 2) Determine next tag using PR labels: release:major|minor|patch (default: patch)
-            const label = (pr.labels || []).map(l => l.name)
-              .find(n => /^release:(major|minor|patch)$/.test(n)) || 'release:patch';
-
+            // 2) Next tag by label on PR
+            const label = (pr.labels || []).map(l => l.name).find(n => /^release:(major|minor|patch)$/.test(n)) || 'release:patch';
             const bump = (tag, type) => {
-              if (!tag || !/^v?\d+\.\d+\.\d+$/.test(tag)) return 'v0.1.0';
+              if (!tag || !/^v?\d+\.\d+\.\d+$/.test(tag)) return 'v1.0.0';
               const [M,m,p] = tag.replace(/^v/,'').split('.').map(Number);
               if (type.endsWith('major')) return `v${M+1}.0.0`;
               if (type.endsWith('minor')) return `v${M}.${m+1}.0`;
@@ -55,36 +50,34 @@ jobs:
             };
             const nextTag = bump(previousTag, label);
 
-            // 3) Auto-generated release notes (fallback to compare)
-            let notesBody = '';
-            try {
-              const rn = await github.rest.repos.generateReleaseNotes({
-                owner, repo,
-                tag_name: nextTag,
-                target_commitish: baseBranch,
-                ...(previousTag ? { previous_tag_name: previousTag } : {})
-              });
-              notesBody = rn.data.body || '';
-            } catch (e) {
-              core.warning(`generateReleaseNotes failed → fallback to compare: ${e.message}`);
-              const base = previousTag ?? `${baseBranch}~1`;
-              const cmp  = await github.rest.repos.compareCommits({ owner, repo, base, head: baseBranch });
-              notesBody  = (cmp.data.commits || [])
-                .map(c => `- ${c.commit.message.split('\n')[0]} (${c.sha.slice(0,7)})`)
-                .join('\n') || 'No changes detected.';
-            }
+            // 3) Build notes via compare (filter merges + bot)
+            const baseForCompare = previousTag ?? `${baseBranch}~1`;
+            const cmp = await github.rest.repos.compareCommits({ owner, repo, base: baseForCompare, head: baseBranch });
 
-            // 4) Create pre-release
-            const title = nextTag; // release title = vX.Y.Z
-            const body  = `**Source PR**: #${prNumber}\n**Branch**: \`${baseBranch}\` (from \`${headBranch}\`)\n\n---\n\n${notesBody}`;
+            const commits = (cmp.data.commits || []).filter(c => {
+              const isMerge = (Array.isArray(c.parents) ? c.parents.length : 0) > 1 || /^Merge\b/i.test(c.commit.message);
+              const isBot   = c.author?.login === 'github-actions[bot]'
+                           || /github-actions\[bot\]/i.test(c.commit?.author?.name || '')
+                           || /actions@github\.com/i.test(c.commit?.author?.email || '');
+              return !isMerge && !isBot;
+            });
 
-            const rel = await github.rest.repos.createRelease({
+            const lines = commits.map(c => `- ${c.commit.message.split('\n')[0]} (${c.sha.slice(0,7)})`);
+            const notes = lines.length ? lines.join('\n') : 'No changes detected.';
+
+            // 4) Create stable release
+            const title = nextTag; // vX.Y.Z
+            const body  = [
+              notes
+            ].join('\n');
+
+            const release = await github.rest.repos.createRelease({
               owner, repo,
               tag_name: nextTag,
               name: title,
               body,
               target_commitish: baseBranch,
               draft: false,
-              prerelease: true
+              prerelease: false
             });
-            core.info(`Pre-release created: ${rel.data.html_url}`);
+            core.info(`Release created: ${release.data.html_url}`);
