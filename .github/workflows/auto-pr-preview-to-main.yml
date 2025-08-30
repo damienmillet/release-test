@@ -30,9 +30,15 @@ jobs:
 
             // 1) Compare main...preview
             const compare = await github.rest.repos.compareCommits({ owner, repo, base, head });
-            const commits = compare.data.commits || [];
+
+            // Exclude merge commits
+            const all = compare.data.commits || [];
+            const commits = all.filter(c =>
+              (Array.isArray(c.parents) ? c.parents.length : 0) <= 1 &&
+              !/^Merge\b/i.test(c.commit.message)
+            );
             if (commits.length === 0) {
-              core.info(`No diff between ${base} and ${head} — no PR created.`);
+              core.info(`No diff (after filtering merges) between ${base} and ${head} — no PR created.`);
               return;
             }
 
@@ -46,7 +52,6 @@ jobs:
               core.warning(`No published release yet: ${e.message}`);
             }
 
-            // derive bump from commit messages (release:major|minor|patch), default patch
             const bumpHint = (commits
               .map(c => c.commit.message.match(/release:(major|minor|patch)/i)?.[1]?.toLowerCase())
               .filter(Boolean).pop()) || 'patch';
@@ -70,12 +75,16 @@ jobs:
               const subject = (m?.[4] ?? msg).split('\n')[0].trim();
               return { type, subject };
             };
-            const prRef = (msg) => (msg.match(/\(#(\d+)\)/)?.[1] ? ` #${msg.match(/$begin:math:text$#(\\d+)$end:math:text$/)[1]}` : '');
+            const prRef = (msg) => {
+              const m = msg.match(/\(#(\d+)\)/);
+              return m ? ` #${m[1]}` : '';
+            };
 
             for (const c of commits) {
               const { type, subject } = extract(c.commit.message);
               const line = `- ${subject}${prRef(c.commit.message)}`;
-              if (type && groups[type]) groups[type].push(line); else groups.other.push(line);
+              if (type && groups[type]) groups[type].push(line);
+              else groups.other.push(line);
             }
 
             const order  = ['feat','fix','perf','refactor','docs','test','build','ci','chore','other'];
@@ -83,9 +92,14 @@ jobs:
               feat:'✨ Features', fix:'🐞 Fixes', perf:'⚡️ Performance', refactor:'♻️ Refactor',
               docs:'📝 Docs', test:'✅ Tests', build:'🏗 Build', ci:'🤖 CI', chore:'🧹 Chore', other:'🔹 Others'
             };
-            const sections = order.filter(k => groups[k].length).map(k => `### ${titles[k]}\n${groups[k].join('\n')}`).join('\n\n');
+            const sections = order
+              .filter(k => groups[k].length)
+              .map(k => `### ${titles[k]}\n${groups[k].join('\n')}`)
+              .join('\n\n');
 
-            const changelog = `## Changelog ${nextTag}\n\n${sections}`;
+            const changelog = sections
+              ? `## Changelog ${nextTag}\n\n${sections}`
+              : `## Changelog ${nextTag}\n\n_No differential commits._`;
 
             // 4) Single block + DIFF
             const START  = '<!-- AUTO-PR-CHANGELOG:START -->';
