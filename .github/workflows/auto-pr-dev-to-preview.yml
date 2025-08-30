@@ -112,7 +112,7 @@ jobs:
             const section = `${START}\n${DIFF}\n${changelog}\n${footer}\n${END}`;
 
             // Titre AVEC date
-            const title = `sync: dev → preview ${nextBeta}-beta`;
+            const title = `sync: dev → preview ${nextBeta}`;
 
             // 5) Find existing PR dev→preview
             const openPRs = await github.paginate(
