@@ -3,10 +3,10 @@ name: Auto PR dev → preview (releases changelog)
 
 on:
   push:
-    branches: [ dev ]
+    branches: [ test ]
   pull_request:
     types: [ closed ]
-    branches: [ dev ]
+    branches: [ test ]
 
 permissions:
   contents: read
