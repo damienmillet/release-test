@@ -94,7 +94,7 @@ jobs:
             const footer = `\n\n> Changelog generated automatically (GitHub Actions).`;
             const section = `${START}\n${DIFF}\n${changelog}\n${footer}\n${END}`;
 
-            const title  = `chore: promote preview → main (release ${nextTag})`;
+            const title  = `sync: preview → main ${nextTag}`;
 
             // 5) Find existing PR preview→main
             const openPRs = await github.paginate(
