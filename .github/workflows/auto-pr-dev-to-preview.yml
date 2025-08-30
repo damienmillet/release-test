@@ -41,7 +41,7 @@ jobs:
               return !isMerge && !isBot;
             });
 
-            // 2) Resolve next tag (pre-release flow)
+            // 2) Resolve next base tag (pre-release flow)
             let previousTag = null;
             try {
               const latest = await github.rest.repos.getLatestRelease({ owner, repo });
@@ -58,7 +58,6 @@ jobs:
 
             const bump = (tag, type='patch') => {
               if (!tag || !/^v?\d+\.\d+\.\d+$/.test(tag)) {
-                // first pre-release clearly below v1
                 if (type === 'major') return 'v1.0.0';
                 if (type === 'minor') return 'v0.1.0';
                 return 'v0.1.1';
@@ -69,21 +68,17 @@ jobs:
               return `v${M}.${m}.${p+1}`;
             };
             const nextTag = bump(previousTag, bumpHint);
-            const nextPre = `${nextTag}-pre`;
+            const nextBeta = `${nextTag}-beta`;
 
             // 3) Group by Conventional Commits
             const groups = { feat:[], fix:[], perf:[], refactor:[], docs:[], test:[], build:[], ci:[], chore:[], other:[] };
             const extract = (msg) => {
-              // type(scope)!: subject  |  subject (#123)
               const m = msg.match(/^(\w+)(\([\w\-\.]+\))?(!)?:\s+(.+)/);
               const type = m?.[1]?.toLowerCase();
               const subject = (m?.[4] ?? msg).split('\n')[0].trim();
               return { type, subject };
             };
-            const prRef = (msg) => {
-              const m = msg.match(/\(#(\d+)\)/);
-              return m ? ` #${m[1]}` : '';
-            };
+            const prRef = (msg) => (msg.match(/\(#(\d+)\)/)?.[1] ? ` #${msg.match(/$begin:math:text$#(\\d+)$end:math:text$/)[1]}` : '');
 
             for (const c of commits) {
               const { type, subject } = extract(c.commit.message);
@@ -99,8 +94,8 @@ jobs:
             const sections = order.filter(k => groups[k].length).map(k => `### ${titles[k]}\n${groups[k].join('\n')}`).join('\n\n');
 
             const changelog = sections
-              ? `## Changelog ${nextPre}\n\n${sections}`
-              : `## Changelog ${nextPre}\n\n_No differential commits._`;
+              ? `## Changelog ${nextBeta}\n\n${sections}`
+              : `## Changelog ${nextBeta}\n\n_No differential commits._`;
 
             // 4) Single block + DIFF fingerprint
             const START  = '<!-- AUTO-PR-CHANGELOG:START -->';
@@ -109,13 +104,10 @@ jobs:
             const footer = `\n\n> Changelog generated automatically (GitHub Actions).`;
             const section = `${START}\n${DIFF}\n${changelog}\n${footer}\n${END}`;
 
-            const title = `sync: dev → preview ${nextPre}`;
+            const title = `sync: dev → preview ${nextBeta}`;
 
             // 5) Find existing PR dev→preview
-            const openPRs = await github.paginate(
-              github.rest.pulls.list,
-              { owner, repo, state: 'open', head: `${owner}:${head}`, base }
-            );
+            const openPRs = await github.paginate(github.rest.pulls.list, { owner, repo, state: 'open', head: `${owner}:${head}`, base });
 
             if (openPRs.length > 0) {
               const current = openPRs[0];
@@ -131,13 +123,8 @@ jobs:
 
             // 6) Create PR with the block
             const body = section;
-            const pr = await github.rest.pulls.create({
-              owner, repo, title, head, base, body, draft: false, maintainer_can_modify: true
-            });
+            const pr = await github.rest.pulls.create({ owner, repo, title, head, base, body, draft: false, maintainer_can_modify: true });
             core.info(`PR created: #${pr.data.number} (${pr.data.html_url})`);
 
-            try {
-              await github.rest.issues.addLabels({ owner, repo, issue_number: pr.data.number, labels: ['automation'] });
-            } catch (e) {
-              core.warning(`Optional label not added: ${e.message}`);
-            }
+            try { await github.rest.issues.addLabels({ owner, repo, issue_number: pr.data.number, labels: ['automation'] }); }
+            catch (e) { core.warning(`Optional label not added: ${e.message}`); }
