@@ -17,7 +17,7 @@ jobs:
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     steps:
-      - name: Create stable release with filtered notes and date
+      - name: Create stable release with filtered notes and delete unchanged beta
         uses: actions/github-script@v7
         with:
           script: |
@@ -51,6 +51,7 @@ jobs:
               return `v${M}.${m}.${p+1}`;
             };
             const nextTag = bump(previousTag, label);
+            const betaTag = `${nextTag}-beta`;
 
             // 3) Build notes via compare (filter merges + github-actions[bot])
             const baseForCompare = previousTag ?? `${baseBranch}~1`;
@@ -67,14 +68,9 @@ jobs:
             const lines = commits.map(c => `- ${c.commit.message.split('\n')[0]} (${c.sha.slice(0,7)})`);
             const notes = lines.length ? lines.join('\n') : 'No changes detected.';
 
-            // 4) Date stamp
-            const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-
-            // 5) Create stable release
-            const title = `${nextTag}`; // vX.Y.Z
-            const body  = [
-              notes
-            ].join('\n');
+            // 4) Create stable release (name = vX.Y.Z)
+            const title = `${nextTag}`;
+            const body  = [ notes ].join('\n');
 
             const release = await github.rest.repos.createRelease({
               owner, repo,
@@ -86,3 +82,36 @@ jobs:
               prerelease: false
             });
             core.info(`Release created: ${release.data.html_url}`);
+
+            // 5) If there is a prerelease vX.Y.Z-beta AND nothing changed since it, delete it + its tag
+            try {
+              // get prerelease by tag
+              const beta = await github.rest.repos.getReleaseByTag({ owner, repo, tag: betaTag });
+
+              // compare commits from beta tag to main
+              const cmpBeta = await github.rest.repos.compareCommits({ owner, repo, base: betaTag, head: baseBranch });
+              const commitsBeta = (cmpBeta.data.commits || []).filter(c => {
+                const isMerge = (Array.isArray(c.parents) ? c.parents.length : 0) > 1 || /^Merge\b/i.test(c.commit.message);
+                const isBot   = c.author?.login === 'github-actions[bot]'
+                             || /github-actions\[bot\]/i.test(c.commit?.author?.name || '')
+                             || /actions@github\.com/i.test(c.commit?.author?.email || '');
+                return !isMerge && !isBot;
+              });
+
+              if (commitsBeta.length === 0) {
+                // delete the prerelease
+                await github.rest.repos.deleteRelease({ owner, repo, release_id: beta.data.id });
+                core.info(`Pre-release ${betaTag} deleted (no changes since beta).`);
+                // delete the tag refs/tags/vX.Y.Z-beta
+                try {
+                  await github.rest.git.deleteRef({ owner, repo, ref: `tags/${betaTag}` });
+                  core.info(`Tag refs/tags/${betaTag} deleted.`);
+                } catch (e) {
+                  core.warning(`Could not delete tag ${betaTag}: ${e.message}`);
+                }
+              } else {
+                core.info(`Pre-release ${betaTag} kept (changes detected since beta).`);
+              }
+            } catch (e) {
+              core.info(`No prerelease tag ${betaTag} found or cannot fetch it: ${e.message}`);
+            }
