@@ -17,7 +17,7 @@ jobs:
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     steps:
-      - name: Create pre-release (-beta) with filtered notes
+      - name: Create pre-release (-beta) with filtered notes and date
         uses: actions/github-script@v7
         with:
           script: |
@@ -27,7 +27,6 @@ jobs:
 
             const baseBranch = pr.base.ref; // preview
             const headBranch = pr.head.ref; // usually dev
-            const prNumber   = pr.number;
 
             // 1) Latest tag
             let previousTag = null;
@@ -39,7 +38,7 @@ jobs:
               core.warning(`No published release yet: ${e.message}`);
             }
 
-            // 2) Next base tag by PR label (release:major|minor|patch)
+            // 2) Next base tag by PR label
             const label = (pr.labels || []).map(l => l.name).find(n => /^release:(major|minor|patch)$/.test(n)) || 'release:patch';
             const bump = (tag, type) => {
               if (!tag || !/^v?\d+\.\d+\.\d+$/.test(tag)) return 'v0.1.0';
@@ -49,9 +48,13 @@ jobs:
               return `v${M}.${m}.${p+1}`;
             };
             const baseTag = bump(previousTag, label);
-            const betaTag = `${baseTag}-beta`;   // <-- suffixe beta pour la pré-release
 
-            // 3) Build notes via compare (filter merges + bot)
+            // 3) Append -beta and add date
+            const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+            const betaTag = `${baseTag}-beta`;
+            const title   = `${betaTag} (${today})`;
+
+            // 4) Build notes via compare (filter merges + bot)
             const baseForCompare = previousTag ?? `${baseBranch}~1`;
             const cmp = await github.rest.repos.compareCommits({ owner, repo, base: baseForCompare, head: baseBranch });
 
@@ -64,12 +67,11 @@ jobs:
             });
 
             const lines = commits.map(c => `- ${c.commit.message.split('\n')[0]} (${c.sha.slice(0,7)})`);
-            const notesBody = lines.length ? lines.join('\n') : 'No changes detected.';
+            const notes = lines.length ? lines.join('\n') : 'No changes detected.';
 
-            // 4) Create pre-release (tag + title en -beta)
-            const title = betaTag; // e.g. v1.2.4-beta
-            const body  = [
-              notesBody
+            // 5) Create pre-release
+            const body = [
+              notes
             ].join('\n');
 
             const rel = await github.rest.repos.createRelease({

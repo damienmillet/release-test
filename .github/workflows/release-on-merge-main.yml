@@ -17,13 +17,16 @@ jobs:
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     steps:
-      - name: Create stable release with filtered notes
+      - name: Create stable release with filtered notes and date
         uses: actions/github-script@v7
         with:
           script: |
             const { owner, repo } = context.repo;
             const pr = context.payload.pull_request;
-            if (!pr) { core.setFailed('This job must be triggered by a pull_request event.'); return; }
+            if (!pr) { 
+              core.setFailed('This job must be triggered by a pull_request event.'); 
+              return; 
+            }
 
             const baseBranch = pr.base.ref; // main
 
@@ -38,7 +41,8 @@ jobs:
             }
 
             // 2) Next tag by PR label release:major|minor|patch (default: patch)
-            const label = (pr.labels || []).map(l => l.name).find(n => /^release:(major|minor|patch)$/.test(n)) || 'release:patch';
+            const label = (pr.labels || []).map(l => l.name)
+              .find(n => /^release:(major|minor|patch)$/.test(n)) || 'release:patch';
             const bump = (tag, type) => {
               if (!tag || !/^v?\d+\.\d+\.\d+$/.test(tag)) return 'v1.0.0';
               const [M,m,p] = tag.replace(/^v/,'').split('.').map(Number);
@@ -63,8 +67,11 @@ jobs:
             const lines = commits.map(c => `- ${c.commit.message.split('\n')[0]} (${c.sha.slice(0,7)})`);
             const notes = lines.length ? lines.join('\n') : 'No changes detected.';
 
-            // 4) Create stable release
-            const title = nextTag; // vX.Y.Z
+            // 4) Date stamp
+            const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+
+            // 5) Create stable release
+            const title = `${nextTag} (${today})`; // vX.Y.Z (2025-08-27)
             const body  = [
               notes
             ].join('\n');
