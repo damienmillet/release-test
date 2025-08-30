@@ -1,12 +1,13 @@
+# .github/workflows/release-on-merge-main.yml
 name: Release on merge → main (auto notes)
 
 on:
   pull_request:
-    types: [ closed ]
-    branches: [ main ]
+    types: [closed]
+    branches: [ main ]   # déclenché quand une PR vers main est fermée
 
 permissions:
-  contents: write
+  contents: write        # requis pour créer le tag + la release
 
 concurrency:
   group: release-on-merge-main
@@ -14,7 +15,7 @@ concurrency:
 
 jobs:
   make-release:
-    if: github.event.pull_request.merged == true
+    if: github.event.pull_request.merged == true  # uniquement si la PR est mergée
     runs-on: ubuntu-latest
     steps:
       - name: Créer la release stable avec changelog auto
@@ -28,10 +29,11 @@ jobs:
               return;
             }
 
-            const baseBranch = pr.base.ref;   // main
-            const headBranch = pr.head.ref;   // preview
+            const baseBranch = pr.base.ref;    // "main"
+            const headBranch = pr.head.ref;    // ex: "preview"
             const prNumber   = pr.number;
 
+            // 1) Dernier tag publié
             let previousTag = null;
             try {
               const latest = await github.rest.repos.getLatestRelease({ owner, repo });
@@ -41,21 +43,27 @@ jobs:
               core.warning(`Aucune release publiée détectée: ${e.message}`);
             }
 
+            // 2) Déterminer le prochain tag (SemVer) via labels PR: release:major|minor|patch
             const label = (pr.labels || []).map(l => l.name)
               .find(n => /^release:(major|minor|patch)$/.test(n)) || 'release:patch';
-            const bump = (tag, type) => {
-              if (!tag || !/^v?\d+\.\d+\.\d+/.test(tag)) return 'v1.0.0';
+
+            function bump(tag, type) {
+              if (!tag || !/^v?\d+\.\d+\.\d+/.test(tag)) return 'v1.0.0'; // point de départ côté main
               const [M,m,p] = tag.replace(/^v/,'').split('.').map(Number);
               if (type.endsWith('major')) return `v${M+1}.0.0`;
               if (type.endsWith('minor')) return `v${M}.${m+1}.0`;
               return `v${M}.${m}.${p+1}`;
-            };
+            }
             const nextTag = bump(previousTag, label);
+            core.info(`Prochain tag: ${nextTag} (${label})`);
 
+            // 3) Release notes officielles (Generate Release Notes) ciblant main
             let notes = '';
             try {
               const rn = await github.rest.repos.generateReleaseNotes({
-                owner, repo, tag_name: nextTag, target_commitish: baseBranch,
+                owner, repo,
+                tag_name: nextTag,
+                target_commitish: baseBranch,
                 ...(previousTag ? { previous_tag_name: previousTag } : {})
               });
               notes = rn.data.body || '';
@@ -63,10 +71,11 @@ jobs:
               core.warning(`Échec generateReleaseNotes → fallback compare: ${e.message}`);
               const base = previousTag ?? `${baseBranch}~1`;
               const cmp  = await github.rest.repos.compareCommits({ owner, repo, base, head: baseBranch });
-              const lines = (cmp.data.commits || []).map(c => `- ${c.commit.message.split('\n')[0]} (${c.sha.slice(0,7)})`);
+              const lines = cmp.data.commits.map(c => `- ${c.commit.message.split('\n')[0]} (${c.sha.slice(0,7)})`);
               notes = lines.length ? lines.join('\n') : 'Aucun changement détecté.';
             }
 
+            // 4) Créer la release STABLE (prerelease: false)
             const title = `${nextTag} – merge #${prNumber} → ${baseBranch}`;
             const body  = [
               `**Source PR**: #${prNumber}`,
@@ -84,6 +93,7 @@ jobs:
               body,
               target_commitish: baseBranch,
               draft: false,
-              prerelease: false
+              prerelease: false     // ✅ stable sur main
             });
+
             core.info(`Release créée: ${release.data.html_url}`);
