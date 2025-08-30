@@ -20,7 +20,7 @@ jobs:
     if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
     runs-on: ubuntu-latest
     steps:
-      - name: Ouvrir/mettre à jour la PR preview → main (changelog groupé)
+      - name: Open/update PR preview → main (overwrite body, no duplicates)
         uses: actions/github-script@v7
         with:
           script: |
@@ -28,34 +28,54 @@ jobs:
             const head = 'preview';
             const base = 'main';
 
-            // --- 1) Compare officiel main...preview
+            // 1) Compare main...preview
             const compare = await github.rest.repos.compareCommits({ owner, repo, base, head });
             const commits = compare.data.commits || [];
             if (commits.length === 0) {
-              core.info(`Aucun diff entre ${base} et ${head} — pas de PR à créer.`);
+              core.info(`No diff between ${base} and ${head} — no PR created.`);
               return;
             }
 
-            // --- 2) Regroupement Conventional Commits (même logique)
-            const groups = { feat:[], fix:[], perf:[], refactor:[], docs:[], test:[], build:[], ci:[], chore:[], other:[] };
+            // 2) Determine next tag (release)
+            let previousTag = null;
+            try {
+              const latest = await github.rest.repos.getLatestRelease({ owner, repo });
+              previousTag = latest.data.tag_name; // e.g. v1.2.3
+              core.info(`Latest release: ${previousTag}`);
+            } catch (e) {
+              core.warning(`No published release yet: ${e.message}`);
+            }
 
+            // derive bump from commit messages (release:major|minor|patch), default patch
+            const bumpHint = (commits
+              .map(c => c.commit.message.match(/release:(major|minor|patch)/i)?.[1]?.toLowerCase())
+              .filter(Boolean).pop()) || 'patch';
+
+            const bump = (tag, type='patch') => {
+              if (!tag || !/^v?\d+\.\d+\.\d+$/.test(tag)) {
+                return (type==='major') ? 'v1.0.0' : (type==='minor' ? 'v1.1.0' : 'v1.0.1');
+              }
+              const [M,m,p] = tag.replace(/^v/,'').split('.').map(Number);
+              if (type === 'major') return `v${M+1}.0.0`;
+              if (type === 'minor') return `v${M}.${m+1}.0`;
+              return `v${M}.${m}.${p+1}`;
+            };
+            const nextTag = bump(previousTag, bumpHint);
+
+            // 3) Group by Conventional Commits
+            const groups = { feat:[], fix:[], perf:[], refactor:[], docs:[], test:[], build:[], ci:[], chore:[], other:[] };
             const extract = (msg) => {
               const m = msg.match(/^(\w+)(\([\w\-\.]+\))?(!)?:\s+(.+)/);
               const type = m?.[1]?.toLowerCase();
               const subject = (m?.[4] ?? msg).split('\n')[0].trim();
               return { type, subject };
             };
-
-            const prRef = (msg) => {
-              const m = msg.match(/\(#(\d+)\)/);
-              return m ? ` #${m[1]}` : '';
-            };
+            const prRef = (msg) => (msg.match(/\(#(\d+)\)/)?.[1] ? ` #${msg.match(/$begin:math:text$#(\\d+)$end:math:text$/)[1]}` : '');
 
             for (const c of commits) {
               const { type, subject } = extract(c.commit.message);
               const line = `- ${subject}${prRef(c.commit.message)}`;
-              if (type && groups[type]) groups[type].push(line);
-              else groups.other.push(line);
+              if (type && groups[type]) groups[type].push(line); else groups.other.push(line);
             }
 
             const order  = ['feat','fix','perf','refactor','docs','test','build','ci','chore','other'];
@@ -63,18 +83,20 @@ jobs:
               feat:'✨ Features', fix:'🐞 Fixes', perf:'⚡️ Performance', refactor:'♻️ Refactor',
               docs:'📝 Docs', test:'✅ Tests', build:'🏗 Build', ci:'🤖 CI', chore:'🧹 Chore', other:'🔹 Others'
             };
+            const sections = order.filter(k => groups[k].length).map(k => `### ${titles[k]}\n${groups[k].join('\n')}`).join('\n\n');
 
-            const sections = order
-              .filter(k => groups[k].length)
-              .map(k => `### ${titles[k]}\n${groups[k].join('\n')}`)
-              .join('\n\n');
+            const changelog = `## Changelog ${nextTag}\n\n${sections}`;
 
-            const changelog = `## Changelog (${head} → ${base})\n\n_Comparaison_: \`${base}...${head}\`\n\n${sections}`;
+            // 4) Single block + DIFF
+            const START  = '<!-- AUTO-PR-CHANGELOG:START -->';
+            const END    = '<!-- AUTO-PR-CHANGELOG:END -->';
+            const DIFF   = `<!-- AUTO-PR-DIFF:${commits.map(c => c.sha).join(',')} -->`;
+            const footer = `\n\n> Changelog generated automatically (GitHub Actions).`;
+            const section = `${START}\n${DIFF}\n${changelog}\n${footer}\n${END}`;
 
-            // --- 3) Ouvrir ou mettre à jour la PR preview → main
-            const title  = 'chore: promote preview → main';
-            const footer = '\n\n---\n> Changelog regroupé automatiquement (GitHub Actions).';
+            const title  = `chore: promote preview → main (release ${nextTag})`;
 
+            // 5) Find existing PR preview→main
             const openPRs = await github.paginate(
               github.rest.pulls.list,
               { owner, repo, state: 'open', head: `${owner}:${head}`, base }
@@ -82,18 +104,29 @@ jobs:
 
             if (openPRs.length > 0) {
               const current = openPRs[0];
-              const newBody = `${changelog}${footer}\n\n${current.body ?? ''}`;
-              await github.rest.pulls.update({ owner, repo, pull_number: current.number, title, body: newBody });
-              core.info(`PR mise à jour: #${current.number} (${current.html_url})`);
+              const newBody = section;
+              if ((current.body ?? '') !== newBody || current.title !== title) {
+                await github.rest.pulls.update({
+                  owner, repo, pull_number: current.number, title, body: newBody
+                });
+                core.info(`PR updated (body overwritten): #${current.number} (${current.html_url})`);
+              } else {
+                core.info('PR already up to date, no change.');
+              }
               return;
             }
 
-            const body = `${changelog}${footer}`;
-            const pr = await github.rest.pulls.create({ owner, repo, title, head, base, body, draft: false, maintainer_can_modify: true });
-            core.info(`PR créée: #${pr.data.number} (${pr.data.html_url})`);
+            // 6) Create PR with the block
+            const body = section;
+            const pr = await github.rest.pulls.create({
+              owner, repo, title, head, base, body, draft: false, maintainer_can_modify: true
+            });
+            core.info(`PR created: #${pr.data.number} (${pr.data.html_url})`);
 
             try {
-              await github.rest.issues.addLabels({ owner, repo, issue_number: pr.data.number, labels: ['automation'] });
+              await github.rest.issues.addLabels({
+                owner, repo, issue_number: pr.data.number, labels: ['automation']
+              });
             } catch (e) {
-              core.warning(`Label non ajouté (optionnel): ${e.message}`);
+              core.warning(`Optional label not added: ${e.message}`);
             }
