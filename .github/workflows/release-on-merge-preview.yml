@@ -17,57 +17,66 @@ jobs:
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     steps:
-      - name: Créer la pré-release avec changelog auto
+      - name: Create pre-release with auto-generated notes
         uses: actions/github-script@v7
         with:
           script: |
             const { owner, repo } = context.repo;
             const pr = context.payload.pull_request;
             if (!pr) {
-              core.setFailed('Ce job doit être déclenché par un event pull_request.');
+              core.setFailed('This job must be triggered by a pull_request event.');
               return;
             }
 
             const baseBranch = pr.base.ref;   // preview
-            const headBranch = pr.head.ref;   // dev (généralement)
+            const headBranch = pr.head.ref;   // usually dev
             const prNumber   = pr.number;
 
+            // 1) Find latest tag/release
             let previousTag = null;
             try {
               const latest = await github.rest.repos.getLatestRelease({ owner, repo });
               previousTag = latest.data.tag_name;
-              core.info(`Dernière release: ${previousTag}`);
+              core.info(`Latest release: ${previousTag}`);
             } catch (e) {
-              core.warning(`Aucune release publiée détectée: ${e.message}`);
+              core.warning(`No published release yet: ${e.message}`);
             }
 
-            const bumpLabel = (pr.labels || []).map(l => l.name)
+            // 2) Determine next tag using PR labels: release:major|minor|patch (default: patch)
+            const label = (pr.labels || []).map(l => l.name)
               .find(n => /^release:(major|minor|patch)$/.test(n)) || 'release:patch';
+
             const bump = (tag, type) => {
-              if (!tag || !/^v?\d+\.\d+\.\d+/.test(tag)) return 'v0.1.0';
+              if (!tag || !/^v?\d+\.\d+\.\d+$/.test(tag)) return 'v0.1.0';
               const [M,m,p] = tag.replace(/^v/,'').split('.').map(Number);
               if (type.endsWith('major')) return `v${M+1}.0.0`;
               if (type.endsWith('minor')) return `v${M}.${m+1}.0`;
               return `v${M}.${m}.${p+1}`;
             };
-            const nextTag = bump(previousTag, bumpLabel);
+            const nextTag = bump(previousTag, label);
 
+            // 3) Auto-generated release notes (fallback to compare)
             let notesBody = '';
             try {
               const rn = await github.rest.repos.generateReleaseNotes({
-                owner, repo, tag_name: nextTag, target_commitish: baseBranch,
+                owner, repo,
+                tag_name: nextTag,
+                target_commitish: baseBranch,
                 ...(previousTag ? { previous_tag_name: previousTag } : {})
               });
               notesBody = rn.data.body || '';
             } catch (e) {
-              core.warning(`Échec generateReleaseNotes → fallback compare: ${e.message}`);
+              core.warning(`generateReleaseNotes failed → fallback to compare: ${e.message}`);
               const base = previousTag ?? `${baseBranch}~1`;
               const cmp  = await github.rest.repos.compareCommits({ owner, repo, base, head: baseBranch });
-              notesBody  = (cmp.data.commits || []).map(c => `- ${c.commit.message.split('\n')[0]} (${c.sha.slice(0,7)})`).join('\n') || 'Aucun changement détecté.';
+              notesBody  = (cmp.data.commits || [])
+                .map(c => `- ${c.commit.message.split('\n')[0]} (${c.sha.slice(0,7)})`)
+                .join('\n') || 'No changes detected.';
             }
 
-            const title = `v${nextTag}`;
-            const body  = `**Source PR**: #${prNumber}\n**Branche**: \`${baseBranch}\` (depuis \`${headBranch}\`)\n\n---\n\n${notesBody}`;
+            // 4) Create pre-release
+            const title = nextTag; // release title = vX.Y.Z
+            const body  = `**Source PR**: #${prNumber}\n**Branch**: \`${baseBranch}\` (from \`${headBranch}\`)\n\n---\n\n${notesBody}`;
 
             const rel = await github.rest.repos.createRelease({
               owner, repo,
@@ -78,4 +87,4 @@ jobs:
               draft: false,
               prerelease: true
             });
-            core.info(`Pré-release créée: ${rel.data.html_url}`);
+            core.info(`Pre-release created: ${rel.data.html_url}`);
