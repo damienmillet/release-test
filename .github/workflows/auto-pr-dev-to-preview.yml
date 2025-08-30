@@ -61,7 +61,7 @@ jobs:
             const sections = order.filter(k => groups[k].length).map(k => `### ${titles[k]}\n${groups[k].join('\n')}`).join('\n\n');
 
             const changelog = sections
-              ? `## Changelog (dev → preview)\n\n_Comparaison_: \`${base}...${head}\`\n\n${sections}`
+              ? `## Changelog (dev → preview)\n\n${sections}`
               : `## Changelog (dev → preview)\n\n_Aucun commit différentiel._`;
 
             // 3) Bloc unique (avec empreinte DIFF – informatif)
