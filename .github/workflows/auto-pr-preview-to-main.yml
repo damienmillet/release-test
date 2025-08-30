@@ -28,7 +28,6 @@ jobs:
             const head = 'preview';
             const base = 'main';
 
-            // --- 1) Compare officiel main...preview
             const compare = await github.rest.repos.compareCommits({ owner, repo, base, head });
             const commits = compare.data.commits || [];
             if (commits.length === 0) {
@@ -36,20 +35,14 @@ jobs:
               return;
             }
 
-            // --- 2) Regroupement Conventional Commits (même logique)
             const groups = { feat:[], fix:[], perf:[], refactor:[], docs:[], test:[], build:[], ci:[], chore:[], other:[] };
-
             const extract = (msg) => {
               const m = msg.match(/^(\w+)(\([\w\-\.]+\))?(!)?:\s+(.+)/);
               const type = m?.[1]?.toLowerCase();
               const subject = (m?.[4] ?? msg).split('\n')[0].trim();
               return { type, subject };
             };
-
-            const prRef = (msg) => {
-              const m = msg.match(/\(#(\d+)\)/);
-              return m ? ` #${m[1]}` : '';
-            };
+            const prRef = (msg) => (msg.match(/\(#(\d+)\)/)?.[1] ? ` #${msg.match(/$begin:math:text$#(\\d+)$end:math:text$/)[1]}` : '');
 
             for (const c of commits) {
               const { type, subject } = extract(c.commit.message);
@@ -59,36 +52,36 @@ jobs:
             }
 
             const order  = ['feat','fix','perf','refactor','docs','test','build','ci','chore','other'];
-            const titles = {
-              feat:'✨ Features', fix:'🐞 Fixes', perf:'⚡️ Performance', refactor:'♻️ Refactor',
-              docs:'📝 Docs', test:'✅ Tests', build:'🏗 Build', ci:'🤖 CI', chore:'🧹 Chore', other:'🔹 Others'
-            };
-
-            const sections = order
-              .filter(k => groups[k].length)
-              .map(k => `### ${titles[k]}\n${groups[k].join('\n')}`)
-              .join('\n\n');
+            const titles = { feat:'✨ Features', fix:'🐞 Fixes', perf:'⚡️ Performance', refactor:'♻️ Refactor', docs:'📝 Docs', test:'✅ Tests', build:'🏗 Build', ci:'🤖 CI', chore:'🧹 Chore', other:'🔹 Others' };
+            const sections = order.filter(k => groups[k].length).map(k => `### ${titles[k]}\n${groups[k].join('\n')}`).join('\n\n');
 
             const changelog = `## Changelog (${head} → ${base})\n\n_Comparaison_: \`${base}...${head}\`\n\n${sections}`;
 
-            // --- 3) Ouvrir ou mettre à jour la PR preview → main
-            const title  = 'chore: promote preview → main';
-            const footer = '\n\n---\n> Changelog regroupé automatiquement (GitHub Actions).';
+            const START = '<!-- AUTO-PR-CHANGELOG:START -->';
+            const END   = '<!-- AUTO-PR-CHANGELOG:END -->';
+            const footer = '\n\n> Changelog regroupé automatiquement (GitHub Actions).';
+            const section = `${START}\n${changelog}\n${footer}\n${END}`;
 
-            const openPRs = await github.paginate(
-              github.rest.pulls.list,
-              { owner, repo, state: 'open', head: `${owner}:${head}`, base }
-            );
+            const title  = 'chore: promote preview → main';
+
+            const openPRs = await github.paginate(github.rest.pulls.list, { owner, repo, state: 'open', head: `${owner}:${head}`, base });
 
             if (openPRs.length > 0) {
               const current = openPRs[0];
-              const newBody = `${changelog}${footer}\n\n${current.body ?? ''}`;
-              await github.rest.pulls.update({ owner, repo, pull_number: current.number, title, body: newBody });
-              core.info(`PR mise à jour: #${current.number} (${current.html_url})`);
+              const prev = current.body ?? '';
+              const hasBlock = prev.includes(START) && prev.includes(END);
+              const newBody = hasBlock ? prev.replace(new RegExp(`${START}[\\s\\S]*?${END}`,'m'), section) : `${section}\n\n${prev}`;
+
+              if (newBody.trim() !== prev.trim()) {
+                await github.rest.pulls.update({ owner, repo, pull_number: current.number, title, body: newBody });
+                core.info(`PR mise à jour: #${current.number} (${current.html_url})`);
+              } else {
+                core.info(`PR déjà à jour, aucune modification.`);
+              }
               return;
             }
 
-            const body = `${changelog}${footer}`;
+            const body = section;
             const pr = await github.rest.pulls.create({ owner, repo, title, head, base, body, draft: false, maintainer_can_modify: true });
             core.info(`PR créée: #${pr.data.number} (${pr.data.html_url})`);
 
