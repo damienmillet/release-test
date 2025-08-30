@@ -32,7 +32,7 @@ jobs:
             const headBranch = pr.head.ref;   // usually dev
             const prNumber   = pr.number;
 
-            // 1) Find latest tag/release
+            // 1) Latest tag/release
             let previousTag = null;
             try {
               const latest = await github.rest.repos.getLatestRelease({ owner, repo });
@@ -42,7 +42,7 @@ jobs:
               core.warning(`No published release yet: ${e.message}`);
             }
 
-            // 2) Determine next tag using PR labels: release:major|minor|patch (default: patch)
+            // 2) Determine next tag from PR labels (release:major|minor|patch)
             const label = (pr.labels || []).map(l => l.name)
               .find(n => /^release:(major|minor|patch)$/.test(n)) || 'release:patch';
 
@@ -55,28 +55,26 @@ jobs:
             };
             const nextTag = bump(previousTag, label);
 
-            // 3) Auto-generated release notes (fallback to compare)
-            let notesBody = '';
-            try {
-              const rn = await github.rest.repos.generateReleaseNotes({
-                owner, repo,
-                tag_name: nextTag,
-                target_commitish: baseBranch,
-                ...(previousTag ? { previous_tag_name: previousTag } : {})
-              });
-              notesBody = rn.data.body || '';
-            } catch (e) {
-              core.warning(`generateReleaseNotes failed → fallback to compare: ${e.message}`);
-              const base = previousTag ?? `${baseBranch}~1`;
-              const cmp  = await github.rest.repos.compareCommits({ owner, repo, base, head: baseBranch });
-              notesBody  = (cmp.data.commits || [])
-                .map(c => `- ${c.commit.message.split('\n')[0]} (${c.sha.slice(0,7)})`)
-                .join('\n') || 'No changes detected.';
-            }
+            // 3) Build release notes via compare (filter merges + github-actions[bot])
+            const baseForCompare = previousTag ?? `${baseBranch}~1`;
+            const cmp = await github.rest.repos.compareCommits({ owner, repo, base: baseForCompare, head: baseBranch });
+
+            const commits = (cmp.data.commits || []).filter(c => {
+              const isMerge = (Array.isArray(c.parents) ? c.parents.length : 0) > 1 || /^Merge\b/i.test(c.commit.message);
+              const isBot   = c.author?.login === 'github-actions[bot]'
+                           || /github-actions\[bot\]/i.test(c.commit.author?.name || '')
+                           || /actions@github\.com/i.test(c.commit.author?.email || '');
+              return !isMerge && !isBot;
+            });
+
+            const lines = commits.map(c => `- ${c.commit.message.split('\n')[0]} (${c.sha.slice(0,7)})`);
+            const notesBody = lines.length ? lines.join('\n') : 'No changes detected.';
 
             // 4) Create pre-release
-            const title = nextTag; // release title = vX.Y.Z
-            const body  = `**Source PR**: #${prNumber}\n**Branch**: \`${baseBranch}\` (from \`${headBranch}\`)\n\n---\n\n${notesBody}`;
+            const title = nextTag; // vX.Y.Z
+            const body  = [
+              notesBody
+            ].join('\n');
 
             const rel = await github.rest.repos.createRelease({
               owner, repo,

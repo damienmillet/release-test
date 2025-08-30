@@ -31,14 +31,17 @@ jobs:
             // 1) Compare preview...dev
             const compare = await github.rest.repos.compareCommits({ owner, repo, base, head });
 
-            // Exclude merge commits
+            // Exclude merges and github-actions[bot]
             const all = compare.data.commits || [];
-            const commits = all.filter(c =>
-              (Array.isArray(c.parents) ? c.parents.length : 0) <= 1 &&
-              !/^Merge\b/i.test(c.commit.message)
-            );
+            const commits = all.filter(c => {
+              const isMerge = (Array.isArray(c.parents) ? c.parents.length : 0) > 1 || /^Merge\b/i.test(c.commit.message);
+              const isBot   = c.author?.login === 'github-actions[bot]'
+                           || /github-actions\[bot\]/i.test(c.commit?.author?.name || '')
+                           || /actions@github\.com/i.test(c.commit?.author?.email || '');
+              return !isMerge && !isBot;
+            });
 
-            // 2) Resolve next tag (pre-release)
+            // 2) Resolve next tag (pre-release flow)
             let previousTag = null;
             try {
               const latest = await github.rest.repos.getLatestRelease({ owner, repo });
@@ -48,13 +51,14 @@ jobs:
               core.warning(`No published release yet: ${e.message}`);
             }
 
-            // bump hint from commit messages: release:major|minor|patch (default: patch)
+            // Bump hint from commit messages: release:major|minor|patch (default: patch)
             const bumpHint = (commits
               .map(c => c.commit.message.match(/release:(major|minor|patch)/i)?.[1]?.toLowerCase())
               .filter(Boolean).pop()) || 'patch';
 
             const bump = (tag, type='patch') => {
               if (!tag || !/^v?\d+\.\d+\.\d+$/.test(tag)) {
+                // first pre-release clearly below v1
                 if (type === 'major') return 'v1.0.0';
                 if (type === 'minor') return 'v0.1.0';
                 return 'v0.1.1';
@@ -70,6 +74,7 @@ jobs:
             // 3) Group by Conventional Commits
             const groups = { feat:[], fix:[], perf:[], refactor:[], docs:[], test:[], build:[], ci:[], chore:[], other:[] };
             const extract = (msg) => {
+              // type(scope)!: subject  |  subject (#123)
               const m = msg.match(/^(\w+)(\([\w\-\.]+\))?(!)?:\s+(.+)/);
               const type = m?.[1]?.toLowerCase();
               const subject = (m?.[4] ?? msg).split('\n')[0].trim();
@@ -83,8 +88,7 @@ jobs:
             for (const c of commits) {
               const { type, subject } = extract(c.commit.message);
               const line = `- ${subject}${prRef(c.commit.message)}`;
-              if (type && groups[type]) groups[type].push(line);
-              else groups.other.push(line);
+              if (type && groups[type]) groups[type].push(line); else groups.other.push(line);
             }
 
             const order  = ['feat','fix','perf','refactor','docs','test','build','ci','chore','other'];
@@ -92,10 +96,7 @@ jobs:
               feat:'✨ Features', fix:'🐞 Fixes', perf:'⚡️ Performance', refactor:'♻️ Refactor',
               docs:'📝 Docs', test:'✅ Tests', build:'🏗 Build', ci:'🤖 CI', chore:'🧹 Chore', other:'🔹 Others'
             };
-            const sections = order
-              .filter(k => groups[k].length)
-              .map(k => `### ${titles[k]}\n${groups[k].join('\n')}`)
-              .join('\n\n');
+            const sections = order.filter(k => groups[k].length).map(k => `### ${titles[k]}\n${groups[k].join('\n')}`).join('\n\n');
 
             const changelog = sections
               ? `## Changelog ${nextPre}\n\n${sections}`
@@ -108,7 +109,7 @@ jobs:
             const footer = `\n\n> Changelog generated automatically (GitHub Actions).`;
             const section = `${START}\n${DIFF}\n${changelog}\n${footer}\n${END}`;
 
-            const title = `sync : dev → preview ${nextTag}`;
+            const title = `sync: dev → preview ${nextPre}`;
 
             // 5) Find existing PR dev→preview
             const openPRs = await github.paginate(
@@ -120,9 +121,7 @@ jobs:
               const current = openPRs[0];
               const newBody = section;
               if ((current.body ?? '') !== newBody || current.title !== title) {
-                await github.rest.pulls.update({
-                  owner, repo, pull_number: current.number, title, body: newBody
-                });
+                await github.rest.pulls.update({ owner, repo, pull_number: current.number, title, body: newBody });
                 core.info(`PR updated (body overwritten): #${current.number} (${current.html_url})`);
               } else {
                 core.info('PR already up to date, no change.');
@@ -138,9 +137,7 @@ jobs:
             core.info(`PR created: #${pr.data.number} (${pr.data.html_url})`);
 
             try {
-              await github.rest.issues.addLabels({
-                owner, repo, issue_number: pr.data.number, labels: ['automation']
-              });
+              await github.rest.issues.addLabels({ owner, repo, issue_number: pr.data.number, labels: ['automation'] });
             } catch (e) {
               core.warning(`Optional label not added: ${e.message}`);
             }
