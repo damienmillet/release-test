@@ -1,15 +1,15 @@
-name: Release on merge → main (auto notes)
+name: Release on merge → preview (auto notes)
 
 on:
   pull_request:
     types: [ closed ]
-    branches: [ main ]
+    branches: [ preview ]
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-on-merge-main
+  group: release-on-merge-preview
   cancel-in-progress: false
 
 jobs:
@@ -17,7 +17,7 @@ jobs:
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     steps:
-      - name: Create stable release with filtered notes
+      - name: Create pre-release (-beta) with filtered notes
         uses: actions/github-script@v7
         with:
           script: |
@@ -25,8 +25,8 @@ jobs:
             const pr = context.payload.pull_request;
             if (!pr) { core.setFailed('This job must be triggered by a pull_request event.'); return; }
 
-            const baseBranch = pr.base.ref; // main
-            const headBranch = pr.head.ref; // preview
+            const baseBranch = pr.base.ref; // preview
+            const headBranch = pr.head.ref; // usually dev
             const prNumber   = pr.number;
 
             // 1) Latest tag
@@ -39,16 +39,17 @@ jobs:
               core.warning(`No published release yet: ${e.message}`);
             }
 
-            // 2) Next tag by label on PR
+            // 2) Next base tag by PR label (release:major|minor|patch)
             const label = (pr.labels || []).map(l => l.name).find(n => /^release:(major|minor|patch)$/.test(n)) || 'release:patch';
             const bump = (tag, type) => {
-              if (!tag || !/^v?\d+\.\d+\.\d+$/.test(tag)) return 'v1.0.0';
+              if (!tag || !/^v?\d+\.\d+\.\d+$/.test(tag)) return 'v0.1.0';
               const [M,m,p] = tag.replace(/^v/,'').split('.').map(Number);
               if (type.endsWith('major')) return `v${M+1}.0.0`;
               if (type.endsWith('minor')) return `v${M}.${m+1}.0`;
               return `v${M}.${m}.${p+1}`;
             };
-            const nextTag = bump(previousTag, label);
+            const baseTag = bump(previousTag, label);
+            const betaTag = `${baseTag}-beta`;   // <-- suffixe beta pour la pré-release
 
             // 3) Build notes via compare (filter merges + bot)
             const baseForCompare = previousTag ?? `${baseBranch}~1`;
@@ -63,21 +64,21 @@ jobs:
             });
 
             const lines = commits.map(c => `- ${c.commit.message.split('\n')[0]} (${c.sha.slice(0,7)})`);
-            const notes = lines.length ? lines.join('\n') : 'No changes detected.';
+            const notesBody = lines.length ? lines.join('\n') : 'No changes detected.';
 
-            // 4) Create stable release
-            const title = nextTag; // vX.Y.Z
+            // 4) Create pre-release (tag + title en -beta)
+            const title = betaTag; // e.g. v1.2.4-beta
             const body  = [
-              notes
+              notesBody
             ].join('\n');
 
-            const release = await github.rest.repos.createRelease({
+            const rel = await github.rest.repos.createRelease({
               owner, repo,
-              tag_name: nextTag,
+              tag_name: betaTag,
               name: title,
               body,
               target_commitish: baseBranch,
               draft: false,
-              prerelease: false
+              prerelease: true
             });
-            core.info(`Release created: ${release.data.html_url}`);
+            core.info(`Pre-release created: ${rel.data.html_url}`);
