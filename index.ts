@@ -3,3 +3,9 @@ export function toto() {
 }
 
 toto();
+
+export function tata() {
+    console.log("Hello from tata!");
+}
+
+tata();
